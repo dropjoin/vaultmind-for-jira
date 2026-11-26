@@ -8,8 +8,9 @@ import ForgeReconciler, {
   SectionMessage,
   Stack,
   Text,
+  useProductContext,
 } from '@forge/react';
-import { invoke } from '@forge/bridge';
+import { invoke, requestJira } from '@forge/bridge';
 
 /**
  * Issue panel (dossier feature 5): verdict badge, the caps, a daily
@@ -19,10 +20,48 @@ import { invoke } from '@forge/bridge';
  */
 const App = () => {
   const [data, setData] = useState(null);
+  const context = useProductContext();
 
   useEffect(() => {
-    invoke('getPanelData').then(setData).catch(() => setData({ error: true }));
-  }, []);
+    if (!context) return undefined;
+    let cancelled = false;
+    const issue = (context.extension && context.extension.issue) || {};
+    const project = (context.extension && context.extension.project) || {};
+    const issueKey = issue.key || '';
+    const issueId = issue.id || '';
+
+    (async () => {
+      // Read the issue as the viewing user, who can see it by
+      // definition. The resolver prefers its own backend fetch and
+      // uses this snapshot only when that fetch fails or comes back
+      // without the fields the policy engine needs.
+      let issueSnapshot = null;
+      try {
+        const res = await requestJira(
+          `/rest/api/3/issue/${issueKey || issueId}?fields=summary,description,labels,reporter,project`,
+        );
+        if (res.ok) {
+          const json = await res.json();
+          issueSnapshot = {
+            key: json.key || issueKey,
+            id: json.id || issueId,
+            fields: json.fields || {},
+          };
+          if (!issueSnapshot.fields.project && project.key) {
+            issueSnapshot.fields.project = { key: project.key };
+          }
+        }
+      } catch (err) {
+        issueSnapshot = null;
+      }
+      const result = await invoke('getPanelData', { issueKey, issueId, issueSnapshot });
+      if (!cancelled) setData(result);
+    })().catch(() => {
+      if (!cancelled) setData({ error: true });
+    });
+
+    return () => { cancelled = true; };
+  }, [context]);
 
   if (!data) return <Text>Loading VaultMind verdict…</Text>;
   if (data.error) {

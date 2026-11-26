@@ -17,8 +17,12 @@ function forgeApi() {
 /** Fetch an issue with the fields the policy engine needs. */
 async function getIssue(issueKey) {
   const { api, route } = forgeApi();
+  // Ask for every field explicitly: the intake reads summary,
+  // description, labels, reporter, project, and site-specific custom
+  // fields, and a default field selection that omits any of them
+  // would silently starve the evaluation.
   const res = await api.asApp().requestJira(
-    route`/rest/api/3/issue/${issueKey}`,
+    route`/rest/api/3/issue/${issueKey}?fields=*all`,
     { headers: { Accept: 'application/json' } },
   );
   if (!res.ok) throw new Error(`Jira issue fetch failed for ${issueKey}: HTTP ${res.status}`);

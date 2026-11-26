@@ -8,15 +8,17 @@
  *
  * The panel never freelances a verdict: it shows the stored evaluation.
  * If the trigger has not recorded one yet (missed event, REST hiccup,
- * issue created before install), the first panel read evaluates and
- * persists the verdict so the panel and audit trail cannot stay blank
- * for a payment request. Later reads re-evaluate only as a dry run
- * when the issue's current fields differ from what was last evaluated,
- * so repeated viewing never reserves budget twice or spams the audit.
+ * issue created before install), the first panel read of a payment
+ * request evaluates and persists the verdict so the panel and audit
+ * trail cannot stay blank. Later reads persist a fresh verdict only
+ * when the issue's current fields differ from what was last
+ * evaluated, so repeated viewing never reserves budget twice or
+ * spams the audit, while an edited request is never shown a stale
+ * verdict.
  */
 
 const { evaluateIssue } = require('../evaluate');
-const { extractRequest, inScope } = require('../issueFields');
+const { extractRequest, inScope, hasPaymentSignals } = require('../issueFields');
 const { getIssue } = require('../jira');
 const { toCents, formatMoney } = require('../policy');
 const { dayKey } = require('../store');
@@ -38,21 +40,85 @@ function csvEscape(value) {
   return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
+function firstString(...values) {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value.trim();
+    if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  }
+  return '';
+}
+
+function issueKeyFromLocation(location) {
+  const text = String(location || '');
+  const browse = text.match(/\/browse\/([A-Z][A-Z0-9]+-\d+)/i);
+  if (browse) return browse[1].toUpperCase();
+  const selected = text.match(/[?&]selectedIssue=([A-Z][A-Z0-9]+-\d+)/i);
+  return selected ? selected[1].toUpperCase() : '';
+}
+
+/**
+ * Resolve the issue reference from every context/payload shape Forge
+ * has used for UI Kit issue panels: the current
+ * `context.extension.issue.{key,id}`, the platform-context
+ * `issueKey`/`issueId` pair, the legacy `extensionContext` fields,
+ * and the explicit payload the panel now sends after reading its own
+ * product context. The panel payload wins when present because the
+ * frontend read it from the live Jira page; the host-page URL is the
+ * last resort so a context-shape change can never silently blank the
+ * panel again.
+ */
 function issueRefFromContext(req) {
   const ctx = (req && req.context) || {};
-  const ext = ctx.extension || ctx.extensionContext || {};
-  const issue = ext.issue || {};
+  const ext = ctx.extension || {};
+  const extCtx = ctx.extensionContext || {};
+  const platform = ctx.platformContext || {};
+  const payload = (req && req.payload) || {};
+  const payloadIssue = payload.issue || {};
+  const extIssue = ext.issue || extCtx.issue || ctx.issue || {};
   return {
-    key: issue.key || ext.issueKey || (req && req.payload && req.payload.issueKey) || '',
-    id: issue.id || ext.issueId || '',
+    key: firstString(
+      payload.issueKey, payloadIssue.key,
+      extIssue.key, ext.issueKey, extCtx.issueKey, platform.issueKey, ctx.issueKey,
+      issueKeyFromLocation(ext.location || ctx.location || payload.location),
+    ),
+    id: firstString(
+      payload.issueId, payloadIssue.id,
+      extIssue.id, ext.issueId, extCtx.issueId, platform.issueId, ctx.issueId,
+    ),
   };
 }
 
+function snapshotIssue(payload, issueKey, issueId) {
+  const snap = payload && payload.issueSnapshot;
+  if (!snap || typeof snap !== 'object') return null;
+  const fields = snap.fields && typeof snap.fields === 'object' ? snap.fields : {};
+  const key = firstString(snap.key, issueKey);
+  const id = firstString(snap.id, issueId);
+  if (!key && !id) return null;
+  // Only trust a snapshot that names the same issue the context named.
+  if (issueKey && key && key.toUpperCase() !== String(issueKey).toUpperCase()) return null;
+  if (issueId && id && String(id) !== String(issueId)) return null;
+  return { key: key || issueKey, id, fields };
+}
+
+function mergeSnapshotFields(issue, snapshot) {
+  if (!snapshot) return issue;
+  if (!issue) return snapshot;
+  const fields = { ...(issue.fields || {}) };
+  for (const [name, value] of Object.entries(snapshot.fields || {})) {
+    if (fields[name] === undefined || fields[name] === null || fields[name] === '') {
+      fields[name] = value;
+    }
+  }
+  return { ...issue, key: issue.key || snapshot.key, id: issue.id || snapshot.id, fields };
+}
+
 async function fetchPanelIssue(issueKey, issueId) {
+  if (!issueKey && !issueId) return null;
   try {
-    return await getIssue(issueKey);
+    return await getIssue(issueKey || issueId);
   } catch (err) {
-    console.warn(`VaultMind panel: issue fetch failed for ${issueKey}: ${err.message}`);
+    console.warn(`VaultMind panel: issue fetch failed for ${issueKey || issueId}: ${err.message}`);
     if (!issueId || String(issueId) === String(issueKey)) return null;
     try {
       return await getIssue(issueId);
@@ -63,22 +129,33 @@ async function fetchPanelIssue(issueKey, issueId) {
   }
 }
 
-async function getPanelData(store, issueKey, issueId) {
+async function getPanelData(store, issueKey, issueId, payload = {}) {
   const policy = await store.getPolicy();
   const today = dayKey();
-  const issue = await fetchPanelIssue(issueKey, issueId);
+  const snapshot = snapshotIssue(payload, issueKey, issueId);
+  // Prefer the backend REST fetch. When it fails (the app user cannot
+  // always browse the project the panel is rendered on), fall back to
+  // the snapshot the panel fetched as the viewing user, who can see
+  // the issue by definition. A REST response with empty fields is
+  // topped up from the snapshot the same way.
+  const issue = mergeSnapshotFields(await fetchPanelIssue(issueKey, issueId), snapshot);
   const canonicalKey = (issue && issue.key) || issueKey;
 
-  let record = await store.getEvalRecord(canonicalKey);
-  if (issue && inScope(issue, policy)) {
+  let record = canonicalKey ? await store.getEvalRecord(canonicalKey) : null;
+  if (issue && canonicalKey && inScope(issue, policy)) {
     const request = extractRequest(issue, policy);
-    if (!record) {
+    if (!record && hasPaymentSignals(issue)) {
+      // First read for a payment request the trigger missed: persist
+      // the verdict, its budget reservation, and one audit entry.
       ({ record } = await evaluateIssue(store, {
         issueKey: canonicalKey, request, actor: 'panel', source: 'panel',
       }));
-    } else if (inputsDiffer(record, request)) {
+    } else if (record && inputsDiffer(record, request)) {
+      // The issue changed since the stored verdict: persist the fresh
+      // verdict once. Repeat views with identical inputs take neither
+      // branch, so viewing never spams the audit or double-reserves.
       ({ record } = await evaluateIssue(store, {
-        issueKey: canonicalKey, request, actor: 'panel', source: 'panel', persist: false,
+        issueKey: canonicalKey, request, actor: 'panel', source: 'panel',
       }));
     }
   }
@@ -112,7 +189,7 @@ function buildResolver(store) {
   // ----- issue panel ---------------------------------------------------
   resolver.define('getPanelData', async (req) => {
     const { key, id } = issueRefFromContext(req);
-    return getPanelData(store, key, id);
+    return getPanelData(store, key, id, (req && req.payload) || {});
   });
 
   // ----- admin: policy config ------------------------------------------
@@ -170,4 +247,4 @@ function buildResolver(store) {
   return resolver.getDefinitions();
 }
 
-module.exports = { buildResolver, csvEscape, getPanelData, issueRefFromContext };
+module.exports = { buildResolver, csvEscape, getPanelData, issueRefFromContext, snapshotIssue };

@@ -31,7 +31,7 @@ require.cache[jiraPath] = {
 
 const { handleIssueTrigger } = require('../src/handlers/trigger');
 const { handleValidator } = require('../src/handlers/validator');
-const { getPanelData } = require('../src/handlers/resolver');
+const { getPanelData, issueRefFromContext } = require('../src/handlers/resolver');
 const actions = require('../src/handlers/actions');
 const { evaluateIssue } = require('../src/evaluate');
 const { createMemoryStore, dayKey } = require('../src/store');
@@ -196,6 +196,97 @@ test('panel evaluates and persists the first evaluation when none is stored', as
   const again = await getPanelData(store, 'KAN-1');
   assert.equal(again.verdict.verdict, 'REJECT');
   assert.equal(again.auditTrail.length, 1); // repeat views do not spam audit
+});
+
+test('issueRefFromContext reads every Forge context and payload shape', () => {
+  assert.deepEqual(
+    issueRefFromContext({ context: { extension: { issue: { key: 'KAN-1', id: '10001' } } } }),
+    { key: 'KAN-1', id: '10001' },
+  );
+  assert.deepEqual(
+    issueRefFromContext({ context: { platformContext: { issueKey: 'KAN-3', issueId: '10003' } } }),
+    { key: 'KAN-3', id: '10003' },
+  );
+  assert.deepEqual(
+    issueRefFromContext({ context: { extensionContext: { issueKey: 'KAN-2', issueId: '10002' } } }),
+    { key: 'KAN-2', id: '10002' },
+  );
+  assert.deepEqual(
+    issueRefFromContext({
+      context: { extension: { location: 'https://vaultmind-dev.atlassian.net/browse/KAN-1' } },
+      payload: { issueKey: 'KAN-1', issueId: '10001' },
+    }),
+    { key: 'KAN-1', id: '10001' },
+  );
+  assert.deepEqual(
+    issueRefFromContext({ context: { extension: { location: 'https://x.atlassian.net/jira/software/projects/KAN/issues/?selectedIssue=KAN-3' } } }),
+    { key: 'KAN-3', id: '' },
+  );
+});
+
+const kanSnapshot = (key, amount) => ({
+  issueSnapshot: {
+    key,
+    id: key === 'KAN-1' ? '10001' : '10003',
+    fields: {
+      summary: 'Payment request for VaultMind verification',
+      description: `Payment request for VaultMind verification (test 1). amount: ${amount} | vendor: Acme Supplies`,
+      reporter: { displayName: 'Alice' },
+      labels: [],
+      project: { key: 'KAN' },
+    },
+  },
+});
+
+test('panel evaluates from the frontend snapshot when REST fetch fails', async () => {
+  const store = await freshStore({ ...POLICY, allowedVendors: ['Acme Supplies'], projectKey: 'KAN' });
+  stub.getIssueError = new Error('Jira issue fetch failed for KAN-1: HTTP 404');
+
+  const reject = await getPanelData(store, 'KAN-1', '10001', kanSnapshot('KAN-1', 150));
+  assert.equal(reject.verdict.verdict, 'REJECT');
+  assert.equal(reject.verdict.primaryRule, 'PER_TX_CAP_EXCEEDED');
+  assert.equal(reject.verdict.amountCents, toCents(150));
+  assert.equal(reject.verdict.vendor, 'Acme Supplies');
+  assert.equal((await store.getEvalRecord('KAN-1')).verdict, 'REJECT');
+  assert.equal(reject.auditTrail.length, 1);
+
+  const pass = await getPanelData(store, 'KAN-3', '10003', kanSnapshot('KAN-3', 50));
+  assert.equal(pass.verdict.verdict, 'PASS');
+  assert.equal(pass.verdict.amountCents, toCents(50));
+  assert.equal((await store.getEvalRecord('KAN-3')).verdict, 'PASS');
+  assert.equal(pass.auditTrail.length, 1);
+
+  // Repeat views with identical inputs write nothing new.
+  const again = await getPanelData(store, 'KAN-3', '10003', kanSnapshot('KAN-3', 50));
+  assert.equal(again.verdict.verdict, 'PASS');
+  assert.equal(again.auditTrail.length, 1);
+  assert.equal(await store.getSpent(dayKey()), toCents(50));
+});
+
+test('panel persists a fresh verdict once when issue inputs change', async () => {
+  const store = await freshStore({ ...POLICY, allowedVendors: ['Acme Supplies'], projectKey: 'KAN' });
+  stub.getIssueError = new Error('Jira issue fetch failed for KAN-3: HTTP 403');
+
+  const pass = await getPanelData(store, 'KAN-3', '10003', kanSnapshot('KAN-3', 50));
+  assert.equal(pass.verdict.verdict, 'PASS');
+
+  const edited = await getPanelData(store, 'KAN-3', '10003', kanSnapshot('KAN-3', 150));
+  assert.equal(edited.verdict.verdict, 'REJECT');
+  assert.equal(edited.verdict.primaryRule, 'PER_TX_CAP_EXCEEDED');
+  assert.equal(edited.auditTrail.length, 2);
+  assert.equal(await store.getSpent(dayKey()), 0); // reservation released
+
+  const again = await getPanelData(store, 'KAN-3', '10003', kanSnapshot('KAN-3', 150));
+  assert.equal(again.auditTrail.length, 2); // no duplicate audit spam
+});
+
+test('panel ignores a snapshot for a different issue', async () => {
+  const store = await freshStore({ ...POLICY, allowedVendors: ['Acme Supplies'], projectKey: 'KAN' });
+  stub.getIssueError = new Error('Jira issue fetch failed for KAN-1: HTTP 404');
+  const data = await getPanelData(store, 'KAN-1', '10001', kanSnapshot('KAN-3', 50));
+  assert.equal(data.verdict, null);
+  assert.equal(await store.getEvalRecord('KAN-1'), null);
+  assert.deepEqual(await store.getAuditForIssue('KAN-1'), []);
 });
 
 // ---------------------------------------------------------- validator

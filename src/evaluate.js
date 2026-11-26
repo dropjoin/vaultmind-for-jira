@@ -27,9 +27,10 @@
  * The Rovo agent action is a read: it calls evaluateIssue with
  * `persist: false`, which computes the exact same verdict without
  * touching the spend total, the eval record, or the audit log. The
- * issue panel is also a read once an evaluation exists; its only
- * write is the first evaluation for an issue with no stored record,
- * so a missed trigger cannot leave the panel and audit blank.
+ * issue panel writes only when there is no stored record for a
+ * payment request, or when the issue's inputs changed since the
+ * stored verdict — so a missed trigger cannot leave the panel and
+ * audit blank, and repeat views with identical inputs write nothing.
  */
 
 const { evaluatePolicy } = require('./policy');
