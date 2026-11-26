@@ -90,11 +90,10 @@ modules:
     - key: vaultmind-agent
       name: VaultMind
       description: >-
-        Explains VaultMind spending-policy verdicts on Jira payment
-        requests: whether a request is within policy, why one was
-        rejected, and how much of today's budget remains. It always reads
-        the deterministic policy engine's verdict and never decides,
-        overrides, or invents one.
+        Explains VaultMind policy verdicts on Jira payment requests:
+        whether a request is within policy, why it was rejected, and how
+        much budget remains. It reads the engine verdict and never
+        decides or invents one.
       prompt: resource:agent-prompt;prompt.md
       conversationStarters:
         - Is this payment request within policy?
