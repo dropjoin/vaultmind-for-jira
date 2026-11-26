@@ -1,0 +1,71 @@
+name: Forge deploy VaultMind for Jira
+
+on:
+  workflow_dispatch:
+    inputs:
+      developer_space_id:
+        description: "Developer Space ID for VaultMind. Leave empty on first run to list spaces."
+        required: false
+        type: string
+      app_name:
+        description: "Forge app name"
+        required: true
+        default: "VaultMind for Jira"
+        type: string
+      site:
+        description: "Atlassian site host"
+        required: true
+        default: "vaultmind-dev.atlassian.net"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      FORGE_EMAIL: ${{ secrets.FORGE_EMAIL }}
+      FORGE_API_TOKEN: ${{ secrets.FORGE_API_TOKEN }}
+      FORGE_NON_INTERACTIVE: "on"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies and Forge CLI
+        run: |
+          npm install
+          npm install -g @forge/cli@latest --no-optional
+          forge settings set usage-analytics false
+
+      - name: Run tests
+        run: npm test
+
+      - name: Register app if needed
+        env:
+          DEVELOPER_SPACE_ID: ${{ inputs.developer_space_id }}
+          APP_NAME: ${{ inputs.app_name }}
+        run: |
+          if grep -q "00000000-0000-0000-0000-000000000000" manifest.yml; then
+            if [ -z "$DEVELOPER_SPACE_ID" ]; then
+              echo "Developer Space ID is empty. Listing spaces, then stopping before register."
+              forge developer-spaces list
+              exit 1
+            fi
+            forge register "$APP_NAME" --developer-space-id "$DEVELOPER_SPACE_ID" --accept-terms --non-interactive
+          else
+            echo "App already registered in manifest.yml"
+          fi
+
+      - name: Deploy to development
+        run: forge deploy -e development --non-interactive
+
+      - name: Install or upgrade on Jira site
+        env:
+          SITE: ${{ inputs.site }}
+        run: |
+          forge install --non-interactive --site "$SITE" -e development -p jira || forge install --upgrade --non-interactive --site "$SITE" -e development -p jira
