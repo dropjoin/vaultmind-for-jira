@@ -15,6 +15,17 @@ Built for **Codegeist 2026** (category: Apps for Business Teams; bonus
 targets: Best Agents, Atlassian MCP, Marketplace, Teamwork Graph
 stretch). Solo entry by M Aziz Yahya (`dropjoin`).
 
+- **Source:** https://github.com/dropjoin/vaultmind-for-jira
+- **Status (26 Nov 2026):** Forge app deployed and installed in the
+  development environment on `vaultmind-dev.atlassian.net`.
+  App ID `9b3559bf-3f3a-4378-a5ad-5604633fa295` (also in
+  `manifest.yml`). Local test suite: 66/66 passing (`npm test`).
+- **Still to verify live before submission:** Rovo chat on the site
+  plan, custom-field mapping or fallback intake on demo data, the
+  workflow validator attached to an Approve transition, judges'
+  installation link, screenshots, and demo video. See
+  "Deployment status" below.
+
 ## How it works
 
 1. A finance admin sets the policy once on the **VaultMind Policy** admin
@@ -103,7 +114,7 @@ SKILL.md                      How third-party agents use the MCP tools
 | 6 | Workflow validator blocks Approve on REJECT | `jira:workflowValidator` + `handlers/validator.js` |
 | 7 | Rovo agent + GET actions | `rovo:agent` + `action` modules + `prompt.md` + `handlers/actions.js` |
 | 8 | Audit log + admin report + CSV export | `store.js` audit keys + resolver `getAuditLog` / `exportAuditCsv` |
-| 9 | Install link, public repo, SKILL.md | Deploy phase (below) + `SKILL.md` |
+| 9 | Install link, public repo, SKILL.md | Public repo (link above) + `SKILL.md`; judges' install link still to generate (see Deployment status) |
 | 11 (stretch) | `rovo:mcp` exposing the GET actions | `rovo:mcp` in `manifest.yml` + `SKILL.md` |
 | 12 (stretch) | Daily rollup scheduled trigger | `scheduledTrigger` + `handlers/rollup.js` |
 | 10 (stretch, not in v1) | Teamwork Graph read | Scopes commented out in `manifest.yml`; org-admin consent is a judge-install risk until the read ships |
@@ -125,8 +136,7 @@ The engine, guardrail, intake, and evaluation service are
 dependency-free and fully testable under plain Node. The Forge packages
 in `package.json` (`@forge/api`, `@forge/kvs`, `@forge/resolver`,
 `@forge/react`, `@forge/bridge`) are used only inside the Forge runtime;
-exact versions should be reconciled with the installed Forge CLI
-template during the deploy phase.
+versions are pinned by `package-lock.json`.
 
 Issue field mapping lives at the top of `src/issueFields.js`
 (`customfield_10050` amount, `…51` vendor, `…52` requester, `…53`
@@ -135,34 +145,38 @@ actual "Payment request" fields — or rely on the documented fallbacks
 (labels `amount:250.00` / `vendor:acme-corp`, or `Amount:` / `Vendor:`
 lines in the description).
 
-## Deploy phase (not done in this scaffold)
+## Deployment status
 
-1. Create an Atlassian API token (id.atlassian.com/manage/api-tokens) —
-   a user-only step; the token never goes in chat or in this repo.
-2. `npm install -g @forge/cli` (Node LTS 22.x ≥22.23.4 or 24.x), then
-   `forge login` with that token.
-3. `forge register` — replaces the placeholder `app.id` in
-   `manifest.yml`.
-4. `npm install` inside this directory; `forge lint` and fix findings
-   (also verify the `rovo:mcp` module is available in the installed CLI —
-   it is Early Access; if unavailable, remove that one module block, the
-   core app is unaffected).
-5. Provision/install on the dev site: `forge site provision` +
-   `forge install --demo-site`, or install on
-   **vaultmind-dev.atlassian.net**. Verify Rovo is present on the site
-   plan (Rovo is a paid-plan feature — Standard/Premium trial if the
-   free dev site lacks it) before demoing the agent.
-6. Configure the policy on the admin page, map the real custom field
-   ids in `src/issueFields.js`, attach the workflow validator to the
-   Approve transition of the payment-request workflow.
-7. Judges' access: generate the installation link from the developer
-   console BEFORE submitting the Marketplace listing (a listed app can
+Done (26 Nov 2026):
+
+- App registered; `manifest.yml` carries the real app ID
+  `9b3559bf-3f3a-4378-a5ad-5604633fa295`.
+- Deployed and installed in the development environment on
+  `vaultmind-dev.atlassian.net`.
+- Manifest includes `rovo:agent` and `rovo:mcp`; `npm test` passes
+  66/66 locally.
+
+Still to do before the Devpost submission (deadline
+23 Dec 2026 03:00 WIB):
+
+1. Verify Rovo is present and answering on the site plan (Rovo is a
+   paid-plan feature — Standard/Premium trial if the dev site lacks it).
+2. Configure the policy on the admin page; map the real custom field
+   ids in `src/issueFields.js`, or confirm the label/description
+   fallbacks on the demo data.
+3. Attach the workflow validator to the Approve transition of the
+   payment-request workflow and confirm an over-cap request is blocked.
+4. Capture screenshots from live Jira (admin page, issue panel REJECT,
+   blocked Approve transition, audit CSV) and record the demo video.
+5. Judges' access: generate the installation link from the developer
+   console BEFORE submitting any Marketplace listing (a listed app can
    no longer be distributed via console links).
-8. Marketplace: complete partner verification + payment profile first,
-   then create the free listing (privacy policy URL, support contact,
-   scope justifications — the app makes zero external calls, which keeps
-   approval simple) and submit; the review ticket link qualifies for the
-   Marketplace bonus even if approval lands after the deadline.
+6. Marketplace (only if pursuing that bonus): complete partner
+   verification + payment profile first, then create the free listing
+   (privacy policy URL, support contact, scope justifications — the app
+   makes zero external calls, which keeps approval simple) and submit;
+   the review ticket link qualifies for the Marketplace bonus even if
+   approval lands after the deadline.
 
 ## License
 
