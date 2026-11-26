@@ -17,6 +17,14 @@ on:
         required: true
         default: "vaultmind-dev.atlassian.net"
         type: string
+      environment:
+        description: "Forge environment to deploy"
+        required: true
+        default: "development"
+        type: choice
+        options:
+          - development
+          - production
 
 permissions:
   contents: read
@@ -61,10 +69,13 @@ jobs:
             echo "App already registered in manifest.yml"
           fi
 
-      - name: Deploy to development
-        run: forge deploy -e development --non-interactive
+      - name: Deploy to selected environment
+        env:
+          FORGE_ENVIRONMENT: ${{ inputs.environment }}
+        run: forge deploy -e "$FORGE_ENVIRONMENT" --non-interactive
 
       - name: Install or upgrade on Jira site
+        if: ${{ inputs.environment == 'development' }}
         env:
           SITE: ${{ inputs.site }}
         run: |
