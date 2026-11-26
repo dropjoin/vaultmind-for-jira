@@ -1,11 +1,8 @@
 # VaultMind for Jira — Forge app manifest
 # Codegeist 2026 entry (Apps for Business Teams).
-# NOTE: `app.id` below is a PLACEHOLDER. The deploy phase replaces it via
-# `forge register` (see README.md, "Deploy phase"). Everything else in
-# this file is final for v1.
 
 app:
-  id: ari:cloud:ecosystem::app/00000000-0000-0000-0000-000000000000
+  id: ari:cloud:ecosystem::app/9b3559bf-3f3a-4378-a5ad-5604633fa295
   runtime:
     name: nodejs24.x
     memoryMB: 512
@@ -19,7 +16,9 @@ modules:
       resource: issue-panel
       resolver:
         function: resolver
+      render: native
       title: VaultMind Policy Check
+      icon: https://developer.atlassian.com/platform/forge/images/icons/issue-panel-icon.svg
 
   # Dossier feature 1 + 8: policy configuration and the audit report.
   jira:adminPage:
@@ -27,6 +26,7 @@ modules:
       resource: admin-page
       resolver:
         function: resolver
+      render: native
       title: VaultMind Policy
 
   # Dossier feature 6: hard enforcement on the Approve transition.
@@ -54,12 +54,9 @@ modules:
     - key: evaluate-payment-request
       name: Evaluate payment request
       description: >-
-        Deterministically evaluates a Jira payment-request issue against
-        the configured VaultMind spending policy (per-transaction cap,
-        daily cap, vendor/requester allowlist, frozen state). Returns the
-        verdict (PASS or REJECT), the exact rule that fired, the reasons,
-        and the remaining daily budget. The verdict is computed by the
-        policy engine, never estimated.
+        Evaluates a Jira payment request against VaultMind policy and
+        returns PASS or REJECT, the rule that fired, reasons, and the
+        remaining daily budget. The verdict is computed, never estimated.
       function: action-evaluate
       actionVerb: GET
       inputs:
@@ -75,6 +72,7 @@ modules:
         counted so far, the cap itself, and the remaining budget.
       function: action-daily-spend
       actionVerb: GET
+      inputs: {}
     - key: get-policy
       name: Get VaultMind policy
       description: >-
@@ -83,6 +81,7 @@ modules:
         and whether spending is frozen.
       function: action-policy
       actionVerb: GET
+      inputs: {}
 
   # Dossier feature 7: the VaultMind Rovo agent. The prompt lives in a
   # resource file (resources/agent-prompt/prompt.md) and is public by
