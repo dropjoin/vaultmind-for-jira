@@ -25,8 +25,16 @@ async function getIssue(issueKey) {
     route`/rest/api/3/issue/${issueKey}?fields=*all`,
     { headers: { Accept: 'application/json' } },
   );
-  if (!res.ok) throw new Error(`Jira issue fetch failed for ${issueKey}: HTTP ${res.status}`);
-  return res.json();
+  if (res.ok) return res.json();
+  // Some sites reject the explicit field selection; the default
+  // selection still carries summary/description/labels, which is
+  // better than no issue at all.
+  const retry = await api.asApp().requestJira(
+    route`/rest/api/3/issue/${issueKey}`,
+    { headers: { Accept: 'application/json' } },
+  );
+  if (!retry.ok) throw new Error(`Jira issue fetch failed for ${issueKey}: HTTP ${res.status}`);
+  return retry.json();
 }
 
 /** Build a minimal ADF document from plain-text paragraphs + bullets. */

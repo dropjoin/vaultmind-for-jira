@@ -89,7 +89,20 @@ function findValue(text, label) {
     'i',
   );
   const m = String(text || '').match(re);
-  return m ? m[1].trim() : '';
+  if (m) return m[1].trim();
+  // Loose form: ADF text often splits a label and its value across
+  // text nodes or table cells ("Amount" in one cell, "150" in the
+  // next), so no colon survives flattening. Accept `amount 150` /
+  // `vendor Acme Supplies` as a last resort; the amount form still
+  // requires a number immediately after the label.
+  const source = String(text || '');
+  if (label.toLowerCase() === 'amount') {
+    const loose = source.match(/\bamount\s*[:=]?\s*([+-]?(?:\d[\d,]*(?:\.\d*)?|\.\d+))/i);
+    return loose ? loose[1].trim() : '';
+  }
+  const loose = source.match(new RegExp(`\\b${label}\\s*[:=]?\\s+([^\\n;|]+)`, 'i'));
+  if (!loose) return '';
+  return loose[1].split(/\s+(?:amount|vendor|currency)\s*[:=]/i)[0].trim();
 }
 
 /** Pull the numeric token out of a labelled amount value. */

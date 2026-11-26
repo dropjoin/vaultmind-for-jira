@@ -332,6 +332,108 @@ test('validator allows out-of-scope projects and blocks on evaluation failure', 
   assert.equal(blocked2.result, false);
 });
 
+const adfDoc = (...paragraphs) => ({
+  type: 'doc',
+  version: 1,
+  content: paragraphs.map((nodes) => ({
+    type: 'paragraph',
+    content: (Array.isArray(nodes) ? nodes : [nodes]).map((text) => ({ type: 'text', text })),
+  })),
+});
+
+const vmdPolicy = { ...POLICY, allowedVendors: ['Acme Supplies'], projectKey: 'VMD' };
+
+const vmdIssue = (key, amount) => ({
+  key,
+  id: key === 'VMD-1' ? '10001' : '10002',
+  fields: {
+    summary: 'Payment request for VaultMind verification',
+    description: adfDoc([
+      'Payment request for VaultMind verification. amount:',
+      ` ${amount} | vendor: `,
+      'Acme Supplies',
+    ]),
+    reporter: { displayName: 'Alice' },
+    labels: [],
+    project: { key: 'VMD' },
+  },
+});
+
+const transitionEvent = (key, id) => ({
+  issue: { id, key },
+  context: { extension: { issue: { id, key } } },
+  transition: { id: '31', name: 'Done' },
+  user: { accountId: 'alice-id' },
+});
+
+test('validator parses ADF inline amount/vendor from a transition payload', async () => {
+  const store = await freshStore(vmdPolicy);
+  stub.issue = vmdIssue('VMD-1', 150);
+  const blocked = await handleValidator(transitionEvent('VMD-1', '10001'), store);
+  assert.equal(blocked.result, false);
+  assert.match(blocked.errorMessage, /PER_TX_CAP_EXCEEDED/);
+  assert.doesNotMatch(blocked.errorMessage, /AMOUNT_NOT_POSITIVE/);
+
+  stub.issue = vmdIssue('VMD-2', 50);
+  assert.deepEqual(
+    await handleValidator(transitionEvent('VMD-2', '10002'), store),
+    { result: true },
+  );
+});
+
+test('validator resolves the issue by id from context when no key is present', async () => {
+  const store = await freshStore(vmdPolicy);
+  stub.issue = vmdIssue('VMD-2', 50);
+  const res = await handleValidator(
+    { context: { platformContext: { issueId: '10002' } }, transition: { name: 'Done' } },
+    store,
+  );
+  assert.deepEqual(res, { result: true });
+  assert.deepEqual(stub.getIssueCalls, ['10002']);
+});
+
+test('validator uses the stored panel evaluation when the fetch is starved', async () => {
+  const store = await freshStore(vmdPolicy);
+  await evaluateIssue(store, {
+    issueKey: 'VMD-2',
+    request: { amountCents: toCents(50), vendor: 'Acme Supplies', requester: 'Alice', currency: 'USD', memo: '' },
+    actor: 'panel',
+    source: 'panel',
+  });
+  await evaluateIssue(store, {
+    issueKey: 'VMD-1',
+    request: { amountCents: toCents(150), vendor: 'Acme Supplies', requester: 'Alice', currency: 'USD', memo: '' },
+    actor: 'panel',
+    source: 'panel',
+  });
+
+  // REST fetch fails and the transition payload carries no fields:
+  // the stored inputs decide, re-checked against the current policy.
+  stub.getIssueError = new Error('Jira issue fetch failed for VMD-2: HTTP 403');
+  assert.deepEqual(
+    await handleValidator(transitionEvent('VMD-2', '10002'), store),
+    { result: true },
+  );
+  const blocked = await handleValidator(transitionEvent('VMD-1', '10001'), store);
+  assert.equal(blocked.result, false);
+  assert.match(blocked.errorMessage, /PER_TX_CAP_EXCEEDED/);
+  assert.doesNotMatch(blocked.errorMessage, /AMOUNT_NOT_POSITIVE/);
+});
+
+test('validator fresh inputs override a stored verdict', async () => {
+  const store = await freshStore(vmdPolicy);
+  await evaluateIssue(store, {
+    issueKey: 'VMD-2',
+    request: { amountCents: toCents(50), vendor: 'Acme Supplies', requester: 'Alice', currency: 'USD', memo: '' },
+    actor: 'panel',
+    source: 'panel',
+  });
+  stub.issue = vmdIssue('VMD-2', 150); // edited up after the panel verdict
+  const res = await handleValidator(transitionEvent('VMD-2', '10002'), store);
+  assert.equal(res.result, false);
+  assert.match(res.errorMessage, /PER_TX_CAP_EXCEEDED/);
+});
+
 // ------------------------------------------------------------ actions
 
 test('evaluateAction rejects malformed issue keys without calling Jira', async () => {
