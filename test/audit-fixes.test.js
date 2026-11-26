@@ -220,6 +220,48 @@ test('extractRequest reads a Vendor line inside a bullet list', () => {
   assert.equal(r.vendor, 'Acme Corp');
 });
 
+test('extractRequest reads inline amount/vendor from the summary', () => {
+  const issue = {
+    key: 'KAN-1',
+    fields: {
+      summary: 'Payment request amount: 150 vendor: Acme Supplies',
+      description: '',
+      reporter: { displayName: 'Bob' },
+      labels: [],
+    },
+  };
+  const r = extractRequest(issue, POLICY);
+  assert.equal(r.amountCents, toCents(150));
+  assert.equal(r.vendor, 'Acme Supplies');
+  assert.equal(r.sources.amount, 'summary');
+  assert.equal(r.sources.vendor, 'summary');
+  assert.equal(hasPaymentSignals(issue), true);
+});
+
+test('extractRequest reads inline amount/vendor from one ADF paragraph', () => {
+  const issue = {
+    key: 'KAN-2',
+    fields: {
+      summary: 'Payment request',
+      description: {
+        type: 'doc', version: 1,
+        content: [{ type: 'paragraph', content: [
+          { type: 'text', text: 'amount: 150' },
+          { type: 'hardBreak' },
+          { type: 'text', text: 'vendor: Acme Supplies' },
+        ] }],
+      },
+      reporter: { displayName: 'Bob' },
+      labels: [],
+    },
+  };
+  const r = extractRequest(issue, POLICY);
+  assert.equal(r.amountCents, toCents(150));
+  assert.equal(r.vendor, 'Acme Supplies');
+  assert.equal(r.sources.amount, 'description');
+  assert.equal(r.sources.vendor, 'description');
+});
+
 test('extractRequest sources report the branch actually used', () => {
   const issue = {
     key: 'PAY-4',

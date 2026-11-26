@@ -24,11 +24,12 @@
  * READ PATHS MUST NOT RESERVE BUDGET. The trigger (on create/update)
  * and the workflow validator (at approval time) are the write paths:
  * they persist the evaluation, the reservation and the audit entry.
- * The Rovo agent action and the issue panel are reads: they call
- * evaluateIssue with `persist: false`, which computes the exact same
- * verdict without touching the spend total, the eval record, or the
- * audit log — so merely asking about, or viewing, a request can never
- * consume daily budget or spam the audit log.
+ * The Rovo agent action is a read: it calls evaluateIssue with
+ * `persist: false`, which computes the exact same verdict without
+ * touching the spend total, the eval record, or the audit log. The
+ * issue panel is also a read once an evaluation exists; its only
+ * write is the first evaluation for an issue with no stored record,
+ * so a missed trigger cannot leave the panel and audit blank.
  */
 
 const { evaluatePolicy } = require('./policy');

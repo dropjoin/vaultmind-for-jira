@@ -59,13 +59,35 @@ function shouldPostComment(prev, record) {
     || prev.remainingAfterCents !== record.remainingAfterCents;
 }
 
+function eventIssue(event) {
+  const issue = (event && event.issue) || {};
+  // Forge delivers custom fields separately from issue.fields on issue
+  // events. Merge them so the payload fallback still carries the
+  // payment signals when the REST re-fetch is unavailable.
+  return {
+    ...issue,
+    fields: {
+      ...((issue && issue.fields) || {}),
+      ...((event && event.customFields) || {}),
+    },
+  };
+}
+
+function eventActor(event) {
+  const users = event && event.associatedUsers && event.associatedUsers.users;
+  const first = Array.isArray(users) ? users[0] : null;
+  return (first && (first.accountId || first.id))
+    || (event && event.atlassianId)
+    || 'trigger';
+}
+
 async function handleIssueTrigger(event, store) {
   const issueKey = event && event.issue && event.issue.key;
   if (!issueKey) return;
 
   const policy = await store.getPolicy();
   // Prefer the full issue from REST — trigger payloads can be partial.
-  let issue = event.issue;
+  let issue = eventIssue(event);
   try {
     issue = await getIssue(issueKey);
   } catch (err) {
@@ -82,7 +104,7 @@ async function handleIssueTrigger(event, store) {
     ({ record } = await evaluateIssue(store, {
       issueKey,
       request,
-      actor: (event.associatedUsers && event.associatedUsers[0]) || 'trigger',
+      actor: eventActor(event),
       source: 'trigger',
     }));
   } catch (err) {
@@ -104,4 +126,4 @@ async function handleIssueTrigger(event, store) {
   }
 }
 
-module.exports = { handleIssueTrigger, verdictComment, shouldPostComment };
+module.exports = { handleIssueTrigger, verdictComment, shouldPostComment, eventIssue };

@@ -18,6 +18,8 @@
  *   - Labels: `amount:250.00`, `vendor:acme-corp`
  *   - Description lines: `Amount: 250.00`, `Vendor: Acme Corp`,
  *     `Currency: USD` (plain text or ADF paragraphs)
+ *   - Inline labelled text in the summary or a single description
+ *     paragraph: `amount: 150 vendor: Acme Supplies`
  * The issue summary + description are also passed through as the memo
  * that the guardrail scan inspects.
  */
@@ -58,6 +60,7 @@ function adfToText(node) {
   if (typeof node === 'string') return node;
   if (Array.isArray(node)) return node.map(adfToText).join(' ');
   if (node.type === 'text') return node.text || '';
+  if (node.type === 'hardBreak') return '\n';
   const inner = adfToText(node.content || []);
   return BLOCK_NODE_TYPES.has(node.type) ? `${inner}\n` : inner;
 }
@@ -65,6 +68,34 @@ function adfToText(node) {
 function findLine(text, label) {
   const m = String(text || '').match(new RegExp(`^\\s*${label}\\s*[:=]\\s*(.+)$`, 'im'));
   return m ? m[1].trim() : '';
+}
+
+const VALUE_LABELS = ['amount', 'vendor', 'currency'];
+
+/**
+ * Find a labelled value in free text. The line form (`Amount: 150` on
+ * its own line) is tried first; the inline form used in summaries and
+ * single-paragraph descriptions (`amount: 150 vendor: Acme Supplies`)
+ * is the fallback. Inline captures stop at the next known label so a
+ * vendor value never swallows a following amount/currency label.
+ */
+function findValue(text, label) {
+  const line = findLine(text, label);
+  if (line) return line;
+  const stop = VALUE_LABELS.filter((l) => l !== label.toLowerCase())
+    .map((l) => `${l}\\s*[:=]`).join('|');
+  const re = new RegExp(
+    `(?:^|[\\s;|])${label}\\s*[:=]\\s*(.+?)(?=(?:\\s+(?:${stop}))|[\\n;|]|$)`,
+    'i',
+  );
+  const m = String(text || '').match(re);
+  return m ? m[1].trim() : '';
+}
+
+/** Pull the numeric token out of a labelled amount value. */
+function amountToken(value) {
+  const m = String(value || '').match(/[+-]?(?:\d[\d,]*(?:\.\d*)?|\.\d+)/);
+  return m ? m[0] : value;
 }
 
 function labelValue(labels, prefix) {
@@ -81,34 +112,41 @@ function labelValue(labels, prefix) {
 function extractRequest(issue, policy) {
   const fields = (issue && issue.fields) || {};
   const descriptionText = adfToText(fields.description);
+  const summaryText = String(fields.summary || '');
   const labels = fields.labels || [];
 
   const amountField = fields[FIELD_IDS.amount];
   const amountLabel = labelValue(labels, 'amount:');
-  const amountLine = findLine(descriptionText, 'Amount');
+  const amountDesc = findValue(descriptionText, 'Amount');
+  const amountSummary = findValue(summaryText, 'Amount');
   let amountRaw;
   let amountSource;
   if (amountField !== null && amountField !== undefined && amountField !== '') {
     amountRaw = amountField; amountSource = 'custom-field';
   } else if (amountLabel) {
     amountRaw = amountLabel; amountSource = 'label';
-  } else if (amountLine) {
-    amountRaw = amountLine; amountSource = 'description';
+  } else if (amountDesc) {
+    amountRaw = amountToken(amountDesc); amountSource = 'description';
+  } else if (amountSummary) {
+    amountRaw = amountToken(amountSummary); amountSource = 'summary';
   } else {
     amountRaw = undefined; amountSource = 'none';
   }
 
   const vendorField = fieldText(fields[FIELD_IDS.vendor]);
   const vendorLabel = labelValue(labels, 'vendor:');
-  const vendorLine = findLine(descriptionText, 'Vendor');
+  const vendorDesc = findValue(descriptionText, 'Vendor');
+  const vendorSummary = findValue(summaryText, 'Vendor');
   let vendor;
   let vendorSource;
   if (vendorField) {
     vendor = vendorField; vendorSource = 'custom-field';
   } else if (vendorLabel) {
     vendor = vendorLabel; vendorSource = 'label';
-  } else if (vendorLine) {
-    vendor = vendorLine; vendorSource = 'description';
+  } else if (vendorDesc) {
+    vendor = vendorDesc; vendorSource = 'description';
+  } else if (vendorSummary) {
+    vendor = vendorSummary; vendorSource = 'summary';
   } else {
     vendor = ''; vendorSource = 'none';
   }
@@ -117,7 +155,8 @@ function extractRequest(issue, policy) {
   if (!requester) requester = fieldText(fields.reporter) || 'unknown';
 
   let currency = fieldText(fields[FIELD_IDS.currency]);
-  if (!currency) currency = findLine(descriptionText, 'Currency');
+  if (!currency) currency = findValue(descriptionText, 'Currency');
+  if (!currency) currency = findValue(summaryText, 'Currency');
   if (!currency) currency = (policy && policy.currency) || 'USD';
 
   return {
@@ -144,20 +183,26 @@ function hasPaymentSignals(issue) {
   const fields = (issue && issue.fields) || {};
   const labels = fields.labels || [];
   const descriptionText = adfToText(fields.description);
+  const summaryText = String(fields.summary || '');
   const amountField = fields[FIELD_IDS.amount];
   return (amountField !== null && amountField !== undefined && amountField !== '')
     || !!fieldText(fields[FIELD_IDS.vendor])
     || !!labelValue(labels, 'amount:')
     || !!labelValue(labels, 'vendor:')
-    || !!findLine(descriptionText, 'Amount')
-    || !!findLine(descriptionText, 'Vendor');
+    || !!findValue(descriptionText, 'Amount')
+    || !!findValue(descriptionText, 'Vendor')
+    || !!findValue(summaryText, 'Amount')
+    || !!findValue(summaryText, 'Vendor');
 }
 
 /** True when the issue belongs to the policy's designated project (if set). */
 function inScope(issue, policy) {
   if (!policy || !policy.projectKey) return true;
-  const key = (issue && issue.key) || '';
-  return key.split('-')[0] === policy.projectKey;
+  const fields = (issue && issue.fields) || {};
+  const projectKey = (fields.project && fields.project.key)
+    || String((issue && issue.key) || '').split('-')[0];
+  return String(projectKey || '').toUpperCase()
+    === String(policy.projectKey).toUpperCase().trim();
 }
 
 module.exports = { extractRequest, inScope, hasPaymentSignals, FIELD_IDS, adfToText };

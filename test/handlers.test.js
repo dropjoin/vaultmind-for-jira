@@ -31,6 +31,7 @@ require.cache[jiraPath] = {
 
 const { handleIssueTrigger } = require('../src/handlers/trigger');
 const { handleValidator } = require('../src/handlers/validator');
+const { getPanelData } = require('../src/handlers/resolver');
 const actions = require('../src/handlers/actions');
 const { evaluateIssue } = require('../src/evaluate');
 const { createMemoryStore, dayKey } = require('../src/store');
@@ -146,6 +147,55 @@ test('trigger survives an evaluation failure without crashing', async () => {
   await assert.doesNotReject(handleIssueTrigger({ issue: { key: 'PAY-2' } }, failing));
   assert.equal(stub.comments.length, 1);
   assert.equal(await store.getEvalRecord('PAY-2'), null);
+});
+
+test('trigger falls back to summary signals and customFields when REST fails', async () => {
+  const store = await freshStore({ ...POLICY, allowedVendors: ['Acme Supplies'], projectKey: 'KAN' });
+  stub.getIssueError = new Error('Jira issue fetch failed for KAN-1: HTTP 403');
+  await handleIssueTrigger({
+    issue: {
+      key: 'KAN-1',
+      fields: {
+        summary: 'Payment request amount: 150 vendor: Acme Supplies',
+        reporter: { displayName: 'Alice' },
+        labels: [],
+      },
+    },
+    customFields: {},
+    associatedUsers: { users: [{ accountId: 'alice-id' }] },
+  }, store);
+  const record = await store.getEvalRecord('KAN-1');
+  assert.equal(record.verdict, 'REJECT');
+  assert.equal(record.primaryRule, 'PER_TX_CAP_EXCEEDED');
+  assert.equal(record.amountCents, toCents(150));
+  assert.equal(record.vendor, 'Acme Supplies');
+  assert.equal(record.actor, 'alice-id');
+  assert.equal(stub.comments.length, 1);
+});
+
+// ------------------------------------------------------------- panel
+
+test('panel evaluates and persists the first evaluation when none is stored', async () => {
+  const store = await freshStore({ ...POLICY, allowedVendors: ['Acme Supplies'], projectKey: 'KAN' });
+  stub.issue = {
+    key: 'KAN-1',
+    fields: {
+      summary: 'Payment request amount: 150 vendor: Acme Supplies',
+      description: '',
+      reporter: { displayName: 'Alice' },
+      labels: [],
+    },
+  };
+  const data = await getPanelData(store, 'KAN-1');
+  assert.equal(data.verdict.verdict, 'REJECT');
+  assert.equal(data.verdict.primaryRule, 'PER_TX_CAP_EXCEEDED');
+  assert.equal(data.verdict.source, 'panel');
+  assert.equal((await store.getEvalRecord('KAN-1')).verdict, 'REJECT');
+  assert.equal(data.auditTrail.length, 1);
+
+  const again = await getPanelData(store, 'KAN-1');
+  assert.equal(again.verdict.verdict, 'REJECT');
+  assert.equal(again.auditTrail.length, 1); // repeat views do not spam audit
 });
 
 // ---------------------------------------------------------- validator
