@@ -1,0 +1,158 @@
+# VaultMind for Jira — Forge app manifest
+# Codegeist 2026 entry (Apps for Business Teams).
+# NOTE: `app.id` below is a PLACEHOLDER. The deploy phase replaces it via
+# `forge register` (see README.md, "Deploy phase"). Everything else in
+# this file is final for v1.
+
+app:
+  id: ari:cloud:ecosystem::app/00000000-0000-0000-0000-000000000000
+  runtime:
+    name: nodejs24.x
+    memoryMB: 512
+    architecture: arm64
+
+modules:
+  # Dossier feature 5: verdict badge, caps, daily-spend gauge, policy
+  # summary and per-issue audit trail, inside the issue view.
+  jira:issuePanel:
+    - key: vaultmind-issue-panel
+      resource: issue-panel
+      resolver:
+        function: resolver
+      title: VaultMind Policy Check
+
+  # Dossier feature 1 + 8: policy configuration and the audit report.
+  jira:adminPage:
+    - key: vaultmind-admin-page
+      resource: admin-page
+      resolver:
+        function: resolver
+      title: VaultMind Policy
+
+  # Dossier feature 6: hard enforcement on the Approve transition.
+  # Blocks while the (freshly re-evaluated) verdict is REJECT.
+  jira:workflowValidator:
+    - key: vaultmind-approve-validator
+      name: VaultMind policy check
+      description: >-
+        Blocks the approval transition while the VaultMind policy verdict
+        for the issue is REJECT (over cap, frozen, or vendor/requester not
+        on the allowlist).
+      function: approve-validator
+
+  # Dossier feature 4: auto-evaluation + verdict comment on create/update.
+  trigger:
+    - key: vaultmind-issue-trigger
+      function: issue-trigger
+      events:
+        - avi:jira:created:issue
+        - avi:jira:updated:issue
+
+  # Dossier feature 7: Rovo agent actions. All GET-verb (read/evaluate)
+  # per the Guide + Guard pattern — the trigger path does the writes.
+  action:
+    - key: evaluate-payment-request
+      name: Evaluate payment request
+      description: >-
+        Deterministically evaluates a Jira payment-request issue against
+        the configured VaultMind spending policy (per-transaction cap,
+        daily cap, vendor/requester allowlist, frozen state). Returns the
+        verdict (PASS or REJECT), the exact rule that fired, the reasons,
+        and the remaining daily budget. The verdict is computed by the
+        policy engine, never estimated.
+      function: action-evaluate
+      actionVerb: GET
+      inputs:
+        issueKey:
+          title: Issue key
+          type: string
+          description: The Jira issue key of the payment request, for example PAY-123.
+          required: true
+    - key: get-daily-spend
+      name: Get daily spend
+      description: >-
+        Returns how much of today's VaultMind daily spending cap has been
+        counted so far, the cap itself, and the remaining budget.
+      function: action-daily-spend
+      actionVerb: GET
+    - key: get-policy
+      name: Get VaultMind policy
+      description: >-
+        Returns the currently configured VaultMind policy: per-transaction
+        cap, daily cap, currency, allowed vendors, allowed requesters,
+        and whether spending is frozen.
+      function: action-policy
+      actionVerb: GET
+
+  # Dossier feature 7: the VaultMind Rovo agent. The prompt lives in a
+  # resource file (resources/agent-prompt/prompt.md) and is public by
+  # design — it ships inside the app package.
+  rovo:agent:
+    - key: vaultmind-agent
+      name: VaultMind
+      description: >-
+        Explains VaultMind spending-policy verdicts on Jira payment
+        requests: whether a request is within policy, why one was
+        rejected, and how much of today's budget remains. It always reads
+        the deterministic policy engine's verdict and never decides,
+        overrides, or invents one.
+      prompt: resource:agent-prompt;prompt.md
+      conversationStarters:
+        - Is this payment request within policy?
+        - How much of today's spending budget is left?
+        - Why was this payment request rejected?
+      actions:
+        - evaluate-payment-request
+        - get-daily-spend
+        - get-policy
+
+  # Dossier stretch feature 11: expose the same GET actions as MCP tools
+  # so customers can add them to their own agents in Rovo Studio.
+  rovo:mcp:
+    - key: vaultmind-mcp
+      name: VaultMind MCP
+      tools:
+        - evaluate-payment-request
+        - get-daily-spend
+
+  # Dossier stretch feature 12: daily rollup summary in the audit log.
+  scheduledTrigger:
+    - key: vaultmind-daily-rollup
+      function: daily-rollup
+      interval: day
+
+  function:
+    - key: resolver
+      handler: index.resolver
+    - key: issue-trigger
+      handler: index.triggerHandler
+    - key: approve-validator
+      handler: index.validatorHandler
+    - key: action-evaluate
+      handler: index.evaluateAction
+    - key: action-daily-spend
+      handler: index.dailySpendAction
+    - key: action-policy
+      handler: index.policyAction
+    - key: daily-rollup
+      handler: index.dailyRollup
+
+resources:
+  - key: issue-panel
+    path: src/frontend/issue-panel.jsx
+  - key: admin-page
+    path: src/frontend/admin-page.jsx
+  - key: agent-prompt
+    path: resources/agent-prompt
+
+permissions:
+  scopes:
+    - read:jira-work
+    - write:jira-work
+    - storage:app
+    # Teamwork Graph scopes are a STRETCH item (dossier feature 10) and
+    # are intentionally NOT requested in v1: installing them requires an
+    # organization admin, which judges may not be. Uncomment when the
+    # TWG read (requester team/manager context) ships:
+    # - read:graph:issue:jira
+    # - read:graph:user:atlassian
